@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Стена квадратов</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&display=swap">
+<style>
+:root{--bg:#e8edf2;--ink:#14213d;--muted:#5d6b82;--sel:#ffc400;--bad:#d62839;--card:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1624;--ink:#e8edf5;--muted:#93a1ba;--card:#18223a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Rubik,system-ui,sans-serif;padding:16px;max-width:1040px;margin-inline:auto}
+h1{font-size:clamp(28px,6vw,48px);line-height:1.05;margin:8px 0 6px;font-weight:700;letter-spacing:-.02em}
+p.sub{margin:0 0 16px;color:var(--muted)}
+canvas{width:100%;height:auto;display:block;touch-action:none;background:var(--card);border:2px solid var(--ink);cursor:crosshair}
+.panel{background:var(--card);border:2px solid var(--ink);margin-top:12px;padding:14px;display:grid;gap:10px}
+.info{font-weight:500}
+input[type=url],input[type=file]{width:100%;padding:10px;font:inherit;border:2px solid var(--ink);background:transparent;color:var(--ink)}
+button{font:inherit;font-weight:700;padding:12px 16px;border:2px solid var(--ink);background:var(--sel);color:#14213d;cursor:pointer}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible,input:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.msg{min-height:1.5em;font-size:14px}.err{color:var(--bad)}
+</style>
+</head>
+<body>
+<h1>Стена квадратов</h1>
+<p class="sub">Выделите свободную область, загрузите картинку и ссылку, оплатите через ЮMoney. Ваша реклама появится на стене.</p>
+<canvas id="c"></canvas>
+<div class="panel">
+  <div class="info" id="info">Проведите по стене, чтобы выбрать область.</div>
+  <input type="url" id="link" placeholder="https://ваш-сайт.ru" autocomplete="url">
+  <input type="file" id="file" accept="image/*">
+  <button id="pay" disabled>Оплатить через ЮMoney</button>
+  <div class="msg" id="msg" role="status"></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+let S, sel = null, drag = null, img = null, cache = {};
+
+async function load() {
+  S = await (await fetch('/api/state')).json();
+  cv.width = S.cols * S.cell; cv.height = S.rows * S.cell;
+  draw();
+}
+const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const busy = r => S.blocks.some(b => hit(b, r));
+
+function draw() {
+  const c = S.cell;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = 'rgba(120,135,160,.25)'; ctx.lineWidth = 1;
+  for (let i = 0; i <= S.cols; i++) { ctx.beginPath(); ctx.moveTo(i*c+.5,0); ctx.lineTo(i*c+.5,cv.height); ctx.stroke(); }
+  for (let j = 0; j <= S.rows; j++) { ctx.beginPath(); ctx.moveTo(0,j*c+.5); ctx.lineTo(cv.width,j*c+.5); ctx.stroke(); }
+  for (const b of S.blocks) {
+    if (b.status === 'paid') {
+      let im = cache[b.id];
+      if (!im) { im = cache[b.id] = new Image(); im.onload = draw; im.src = `/img/${b.id}.jpg`; }
+      if (im.complete && im.naturalWidth) ctx.drawImage(im, b.x*c, b.y*c, b.w*c, b.h*c);
+    } else { ctx.fillStyle = 'rgba(120,135,160,.35)'; ctx.fillRect(b.x*c, b.y*c, b.w*c, b.h*c); }
+  }
+  if (sel) {
+    const bad = busy(sel);
+    ctx.fillStyle = bad ? 'rgba(214,40,57,.35)' : 'rgba(255,196,0,.45)';
+    ctx.fillRect(sel.x*c, sel.y*c, sel.w*c, sel.h*c);
+    ctx.strokeStyle = bad ? '#d62839' : '#14213d'; ctx.lineWidth = 3;
+    ctx.strokeRect(sel.x*c+1.5, sel.y*c+1.5, sel.w*c-3, sel.h*c-3);
+  }
+}
+const cellAt = e => {
+  const r = cv.getBoundingClientRect();
+  return { x: Math.min(S.cols-1, Math.max(0, Math.floor((e.clientX-r.left)/r.width*S.cols))),
+           y: Math.min(S.rows-1, Math.max(0, Math.floor((e.clientY-r.top)/r.height*S.rows))) };
+};
+cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); drag = cellAt(e); upd(drag); });
+cv.addEventListener('pointermove', e => { if (drag) upd(cellAt(e)); });
+cv.addEventListener('pointerup', e => {
+  if (drag && sel && sel.w === 1 && sel.h === 1) {
+    const b = S.blocks.find(b => b.link && hit(b, sel));
+    if (b) { window.open(b.link, '_blank', 'noopener'); sel = null; draw(); }
+  }
+  drag = null; refresh();
+});
+function upd(p) {
+  sel = { x: Math.min(drag.x,p.x), y: Math.min(drag.y,p.y), w: Math.abs(p.x-drag.x)+1, h: Math.abs(p.y-drag.y)+1 };
+  draw(); refresh();
+}
+function refresh() {
+  const ok = sel && !busy(sel);
+  if (!sel) $('info').textContent = 'Проведите по стене, чтобы выбрать область.';
+  else if (!ok) $('info').textContent = 'В выбранной области есть занятые квадраты.';
+  else $('info').textContent = `Выбрано ${sel.w}×${sel.h} = ${sel.w*sel.h} кв. (${sel.w*S.cell}×${sel.h*S.cell} px). Цена: ${sel.w*sel.h*S.price} ₽`;
+  $('pay').disabled = !(ok && img && $('link').value);
+}
+$('link').addEventListener('input', refresh);
+$('file').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) { img = null; return refresh(); }
+  const im = new Image(); im.onload = () => { img = im; refresh(); }; im.src = URL.createObjectURL(f);
+});
+const msg = (t, err) => { $('msg').textContent = t; $('msg').className = 'msg' + (err ? ' err' : ''); };
+
+$('pay').addEventListener('click', async () => {
+  // подгоняем картинку под размер выбранной области (обрезка по центру)
+  const W = sel.w*S.cell, H = sel.h*S.cell, k = document.createElement('canvas');
+  k.width = W; k.height = H;
+  const sc = Math.max(W/img.width, H/img.height), dw = img.width*sc, dh = img.height*sc;
+  k.getContext('2d').drawImage(img, (W-dw)/2, (H-dh)/2, dw, dh);
+  $('pay').disabled = true; msg('Создаём заказ…');
+  try {
+    const r = await fetch('/api/order', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ...sel, link: $('link').value.trim(), image: k.toDataURL('image/jpeg', .85) }) });
+    const d = await r.json();
+    if (!r.ok) { msg(d.error, true); await load(); return refresh(); }
+    const f = document.createElement('form');
+    f.method = 'POST'; f.action = 'https://yoomoney.ru/quickpay/confirm';
+    Object.entries({ receiver: d.receiver, 'quickpay-form': 'shop', targets: 'Реклама на стене',
+      sum: d.sum, label: d.id, successURL: d.successURL }).forEach(([n, v]) => {
+        const i = document.createElement('input'); i.type = 'hidden'; i.name = n; i.value = v; f.appendChild(i); });
+    document.body.appendChild(f); f.submit();
+  } catch { msg('Ошибка сети, попробуйте ещё раз', true); refresh(); }
+});
+
+// возврат после оплаты: ждём подтверждения от ЮMoney
+(async () => {
+  await load();
+  const id = new URLSearchParams(location.search).get('paid');
+  if (!id) return;
+  msg('Проверяем оплату…');
+  for (let i = 0; i < 20; i++) {
+    const { status } = await (await fetch('/api/order/' + id)).json();
+    if (status === 'paid') { msg('Оплата получена. Ваш квадрат на стене!'); return load(); }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  msg('Оплата ещё не подтверждена. Обновите страницу через минуту.', true);
+})();
+</script>
+</body>
+</html>
